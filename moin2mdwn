@@ -1,0 +1,494 @@
+#!/usr/bin/python
+import sys, datetime
+from MoinMoin.formatter import text_html, FormatterBase
+from MoinMoin.action import AttachFile
+from MoinMoin.parser import text_moin_wiki
+from MoinMoin import Page, user, wikiutil
+from MoinMoin.script import MoinScript
+from MoinMoin.script import log
+sys.path.insert(0, '.')
+
+smiley_subst = {
+    "<!>":  "[!]",
+}
+
+# TODO
+# - import the interwiki map in the shortcuts page
+# - dictcolumns
+class MarkdownFormatter(text_html.Formatter):
+        macro_subst = {
+                'tableofcontents': 'toc',
+                'navigation': 'inline',
+                'datetime': None,
+                'date': None,
+                'mailto': None,
+                'pagecount': 'pagecount',
+                'orphanedpages': 'orphans',
+                'gettext': None,
+                'randomquote': 'fortune',
+                }
+        interwiki_subst = { 'Wiki': 'c2',
+                            'WikiPedia': 'wikipedia'}
+        interwiki_missing = []
+        parser_subst = {
+                'text': 'txt',
+                'sctable': 'csv',
+                'sstable': 'csv',
+                'irc': 'txt',
+                'rst': 'rst',
+                'CSV': 'csv',
+                'csv': 'csv',
+                'rhtml': 'html',
+                'html': 'rawhtml',
+                'sql': 'sql',
+                'php': 'php',
+                'xml': 'xml',
+                'perl': 'perl'
+                }
+        footnotes = []
+
+        no_p = 0
+
+        templates_patterns = {}
+
+        def __init__(self, request):
+		text_html.Formatter.__init__(self, request)
+
+        def dump_footnotes(self):
+                count = 0
+                out = ''
+                for footnote in self.footnotes:
+                        count += 1
+                        out += "\n[^%d] %s" % (count, footnote)
+                if len(out) > 0:
+                        out = "\n" + out + "\n"
+                self.footnotes = []
+                return out
+
+	def _open(self, tag, newline=False, attr=None, allowed_attrs=None, **kw):
+		for class_attr in "css_class", "css":
+			if class_attr in kw:
+				del kw[class_attr]
+		if attr and "class" in attr:
+			del attr["class"]
+		return text_html.Formatter._open(self, tag, newline, attr, allowed_attrs, **kw)
+
+
+        def _indent_spaces(self):
+                """Returns space(s) for indenting the html source so list nesting is easy to read.
+                
+                Note that this mostly works, but because of caching may not always be accurate."""
+                return ' ' * (3 * (self._tmp_parser._indent_level() - 1))
+
+        # Links ##############################################################
+
+	def pagelink(self, on, pagename='', page=None, **kw):
+                if on:
+                        return '[['
+                else:
+                        return '|' + pagename + ']]'
+
+        def interwikilink(self, on, interwiki='', pagename='', **kw):
+                """ calls pagelink() for internal interwikilinks
+                to make sure they get counted for self.pagelinks.
+                IMPORTANT: on and off must be called with same parameters, see
+                           also the text_html formatter.
+                       """
+                if on:
+                        if not interwiki in self.interwiki_subst:
+                                self.interwiki_missing.append(interwiki)
+                        out = '[[!' + self.interwiki_subst.get(interwiki, interwiki) + ' ' + pagename + ' desc="'
+                        return out
+                else:
+                        return '"]]'
+
+
+        def url(self, on, url=None, css=None, **kw):
+                if on:
+                        self._url_cache = url
+                        return '[['
+                else:
+                        if not url:
+                                url = self._url_cache
+                        self._url_cache = None
+                        return '' + ('|' + url + ']]' if url else "]]")
+
+        # Attachments ######################################################
+	def attachment_link(self, on, url=None, **kw):
+                if on:
+                        return self.url(on, url)
+                else:
+                        return self.url(on)
+
+	def attachment_image(self, url, **kw): return self.image(url)
+	def attachment_drawing(self, url, text, **kw): raise NotImplementedError("attachment_drawing not implemented")
+        def anchordef(self, name): raise NotImplementedError
+        def line_anchordef(self, lineno): return ''
+        def anchorlink(self, on, name='', **kw): raise NotImplementedError
+        def line_anchorlink(self, on, lineno=0): raise NotImplementedError
+
+        def image(self, src=None, **kw):
+                title = src
+                for titleattr in ('title', 'html__title', 'alt', 'html__alt'):
+                        if titleattr in kw:
+                                title = kw[titleattr]
+                                break
+                if title:
+                        return '[[!img %s]' % title
+                raise NotImplementedError("image: not sure what to do without a title??")
+                #return '[[!img]]'
+
+        # generic transclude/include:
+        def transclusion(self, on, **kw):
+                if 'data' in kw and kw['data'].startswith('/'):
+                        # in this wiki
+                        if '?action=AttachFile&do=get&target=' in kw['data']:
+                                _, attach = kw['data'].rsplit("=", 1)
+                                page, _ = kw['data'].split('?', 1)
+                                return '[[!inline pages="%s/%s" feeds="no" raw="yes"]]' % (page, attach)
+                # we ignore closing tags now
+                if not on: return ''
+                raise NotImplementedError("unknown transclusion mode, args: " + repr(kw))
+
+        def transclusion_param(self, **kw): raise NotImplementedError
+	def smiley(self, text):	return smiley_subst.get(text, text)
+        def nowikiword(self, text): return self.text(text)
+        def _text(self, text): return text
+        def strong(self, on, **kw): return '**'
+        def emphasis(self, on, **kw): return '_'
+        def underline(self, on, **kw): return ['<ins>', '</ins>'][not on]
+        def highlight(self, on, **kw): return '***'
+        def sup(self, on, **kw): return ['<sup>', '</sup>'][not on]
+        def sub(self, on, **kw): return ['<sub>', '</sub>'][not on]
+        def strike(self, on, **kw): return ['<del>', '</del>'][not on]
+        def code(self, on, **kw): return '`'
+
+        def preformatted(self, on, **kw):
+                if on:
+                        return '[[!format txt """' + "\n"
+                else:
+                        return "\n" + '"""]]'
+
+        # apparently, this is valid again in HTML5 and only deprecated (so okay) in HTML4
+        def small(self, on, **kw): return ['<small>', '</small>'][not on]
+
+        def big(self, on, **kw): return '****'
+
+        # special markup for syntax highlighting #############################
+        def code_area(self, on, code_id, code_type='txt', show=0, start=-1, step=-1, msg=None):
+                log("args to code_area: code_id: %s, code_type: %s, show=%s, start=%s, step=%s, msg=%s"  % (code_id, code_type, show, start, step, msg))
+                if on:
+                        return '[[!format %s """%s' % (code_type, "\n")
+                else:
+                        return '"""]]'
+
+        def code_line(self, on): return ''
+        def code_token(self, tok_text, tok_type): return ''
+
+        # Paragraphs, Lines, Rules ###########################################
+        def linebreak(self, preformatted=1): raise NotImplementedError
+
+        def paragraph(self, on, **kw):
+                FormatterBase.paragraph(self, on)
+                if self._terse or self.no_p:
+                        return ''
+                return "\n"
+
+        def rule(self, size=0, **kw): return "\n---\n"
+        def icon(self, type): return type
+
+        # Lists ##############################################################
+
+        def number_list(self, on, type=None, start=None, **kw):
+                self._indent_level += 1 if on else -1
+                return ""
+
+        def bullet_list(self, on, **kw):
+                self._indent_level += 1 if on else -1
+                return ""
+
+        def listitem(self, on, **kw):
+                if on: 
+                        self.no_p = 1
+                        try:
+                                return "\n" + self._indent_spaces() + ("* " if self._tmp_parser.list_types[-1] == 'ul' else '1. ')
+                        except IndexError:
+                                if kw['style'] == 'list-style-type:none':
+                                        # just guessing: some random list without proper markup, trying bullet
+                                        log("warning: bizarre list here")
+                                        return "\n * "
+                self.no_p = 0
+                return ''
+
+        def definition_list(self, on, **kw): return ''
+        def definition_term(self, on, compact=0, **kw): return ['', "\n"][not on]
+        def definition_desc(self, on, **kw): return [": ", "\n\n"][not on]
+        def heading(self, on, depth, **kw):  return [("#" * depth) + " ", "\n"][not on]
+
+        # Tables #############################################################
+
+        def table(self, on, attrs=None, **kw):
+                self.in_table = on
+                self.no_p = on
+                return ["[[!table header=\"no\" class=\"mointable\" data=\"\"\"\n", "\"\"\"]]\n"][not on]
+
+        def table_row(self, on, attrs=None, **kw):
+                if on:
+                        self.pendingcell = ''
+                        self.tablecolnum = 0
+                        return ""
+                else:
+                        return self.pendingcell + "\n"
+
+        def table_cell(self, on, attrs=None, **kw):
+                if on:
+                        if 'colspan' in attrs:
+                                # If this will span multiples, we have to set the 'off' text appropriately.
+                                pipecount = int(attrs['colspan'].strip('"'))
+                                if pipecount > 1:
+                                        self.pendingcell += '|' * pipecount
+                        if 'rowspan' in attrs:
+                                raise NotImplementedError("rowspan not implemented")
+                        if self.tablecolnum == 0:
+                                self.tablecolnum += 1
+                                # We don't start the line with a pipe symbol
+                                return ''
+                        else:
+                                self.tablecolnum += 1
+                                return ' | '
+                else:
+                        tooutput = self.pendingcell
+                        self.pendingcell = ''
+                        return tooutput
+
+        # Dynamic stuff / Plugins ############################################
+        def macro(self, macro_obj, name, args, markup=None):
+                if args:
+                        args_list = map(lambda x: x.strip(' '), args.split(','))
+                else:
+                        args_list = []
+                if name.lower() == 'newpage':
+                        extra = []
+                        if len(args_list) > 1:
+                                extra.append('postformtext="%s"' % args_list[1])
+                        if len(args_list) > 2:
+                                extra.append('rootpage="%s"' % args_list[2])
+                                if not args_list[0] in self.templates_patterns:
+                                        self.templates_patterns[args_list[0]] = []
+                                if not args_list[2] in self.templates_patterns[args_list[0]]:
+                                        self.templates_patterns[args_list[0]].append(args_list[2])
+                        return '[[!inline pages="creation_year(1970)" quick feeds=no %s]]' % " ".join(extra)
+                if name.lower() == 'pagelist':
+                        args = args.split(":")[-1] # discard regex:
+                        return '[[!map pages="%s"]]' % args
+                if name.lower() in ['navigation', 'navitree']:
+                        parent = self.page.page_name
+                        if args_list[0] == 'siblings':
+                                parent, _ = parent.rsplit("/", 1)
+                                args_list[0] = 'children' # to fall through below
+                        if args_list[0] in ['children', 'childtree']:
+                                exclude = ''
+                                if len(args_list)>1:
+                                        try:
+                                                depth = int(args_list[1].strip())
+                                                exclude = ' and !' + parent + ('/*' * (depth +1))
+                                        except:
+                                                log("warning: non-integer second argument to Navigation macro: %s" % args_list[1])
+                                                pass
+                                return '[[!map pages="%s/*%s"]]' % (parent, exclude)
+                        else:
+                                raise NotImplementedError("parameter %s to Navigation macro not implemented" % args_list[0])
+                if name.lower() == 'monthcalendar':
+                        extra = ''
+                        if len(args_list) > 0:
+                                extra += ' pages="%s/*"' % args_list[0]
+                        if len(args_list) > 1:
+                                log("warning: extra parameters not implemented in macro MonthCalendar: " + ",".join(args_list[1:]))
+                                # XXX: consider this: http://ikiwiki.info/todo/Javascript_calendar/
+                        return '[[!calendar type="month"%s]]' % extra
+                if name.lower() == 'anchor':
+                        return '<a name="%s"></a>' % args
+                if name.lower() == 'footnote':
+                        self.footnotes.append(args)
+                        return '[^%d]' % len(self.footnotes)
+                if name.lower() == 'mailto':
+                        if '@' in args:
+                                if len(args_list) > 1:
+                                        return '[%s](%s)' % args_list.reverse()
+                                else:
+                                        return '[[%s]]' % args
+                if name.lower() == 'date' or name.lower() == 'datetime':
+                        if name.lower() == 'date':
+                                fmt = self.request.user.date_fmt or self.request.user._cfg.date_fmt
+                        else:
+                                fmt = self.request.user.datetime_fmt or self.request.user._cfg.datetime_fmt
+                        if args:
+                                try:
+                                        dt = datetime.datetime.utcfromtimestamp(int(args))
+                                except ValueError:
+                                        try:
+                                                dt = datetime.datetime.strptime(args, '%Y-%m-%d')
+                                        except ValueError:
+                                                try:
+                                                        dt = datetime.datetime.strptime(args, '%Y-%m-%dT%H:%M:%S%Z')
+                                                except ValueError:
+                                                        ts, tz = (args[:19], args[19:])
+                                                        if tz == 'Z' or not tz:
+                                                                offset = datetime.timedelta()
+                                                        else:
+                                                                try:
+                                                                        offset = datetime.timedelta(hours=int(tz[:3]), minutes=int(tz[3:]))
+                                                                except ValueError:
+                                                                        log("could not parse %s args: '%s'" % (name, args))
+                                                                        return args
+                                                        dt = datetime.datetime.strptime(ts, '%Y-%m-%dT%H:%M:%S') + offset
+                        else:
+                                dt = datetime.datetime.now()
+                        args = dt.strftime(fmt)
+                if name.lower() == 'br':
+                        return "  \n"
+                if name.lower() == 'attachlist' or name.lower() == 'attachinfo':
+                        return '[[!inline pages="!page(%s/*) and glob(%s/*)" quick archive="yes" feeds="no"]]' % (self.page.page_name.replace(" ", "_"), self.page.page_name.replace(" ", "_"))
+                if name.lower() == 'fullsearch' or name.lower() == 'fullsearchcached':
+                        if not args:
+                                log("warning: not generating a search form")
+                                return ''
+                        else:
+                                params = []
+                                for item in args.split(" "):
+                                        try:
+                                                mode, pattern = item.split(":")
+                                        except:
+                                                mode, pattern = 'full', item
+                                        param = ''
+                                        if pattern.lower() in [ 'and', 'or' ]:
+                                                raise NotImplementedError('and/or patterns not supported in fullsearch (because we are lazy)')
+                                        if mode.startswith('-'):
+                                                param = '!'
+                                                mode = mode.lstrip('-')
+                                        if mode.startswith('t'):
+                                                param += 'page(*%s*)' % pattern
+                                        elif mode.startswith('l') or mode.startswith('cat'):
+                                                param += 'link(%s)' % pattern
+                                        elif mode.startswith('f') or mode.startswith('r'):
+                                                log("warning: generating a link search instead of full seach for pattern %s" % pattern)
+                                                param += 'link(%s)' % pattern
+                                        else:
+                                                # missing: case: regex: language: mimetype: domain:
+                                                log("unsupported search type %s:%s in ikiwiki" % (mode, pattern))
+                                                raise NotImplementedError("unsupported search type %s:%s in ikiwiki" % (mode, pattern))
+                                        params.append(param)
+                                return '[[!inline pages="%s" quick feeds="no" archive="yes"]]' % " and ".join(params)
+                if name.lower() == 'include':
+                        if len(args_list) > 1:
+                                log("warning: discarding arguments after the pagespec in inline: " + " ".join(args_list[1:]))
+                        return '[[!inline pages="%s" quick="yes" raw="yes"]]' % args_list[0]
+                if name.lower() == 'recentchanges':
+                        return '[[!inline pages="internal(recentchanges/change_*) and !*/Discussion" template=recentchanges show=0]]'
+                if name.lower() in ['dictcolumns', 'randompage', 'advancedsearch', 'goto', 'gallery', 'searchinpagesandsort', 'icon']: # skip those
+                        log("warning: skipping macro <<%s(%s)>>" % (name, args))
+                        return ''
+                if not name.lower() in self.macro_subst:
+                        raise NotImplementedError("macro <<%s(%s)>> unknown in Ikiwiki" % (name, args))
+                m = self.macro_subst.get(name.lower())
+                if m:
+                        return "[[!%s %s]]" % (m, args if args else "")
+                else:
+                        return args if args else ""
+
+        def parser(self, parser_name, lines):
+                fmt = None # if this is just a format thing
+                if parser_name in ['highlight', 'markup']:
+                        fmt = lines.pop(0).split(' ', 2)[1]
+                elif parser_name in self.parser_subst:
+                        fmt = self.parser_subst[parser_name]
+                if fmt:
+                        return '[[!format %s """%s"""]]' % (fmt, "\n" + "\n".join(lines) + "\n")
+                if parser_name in ['sidebar', 'section', 'figure']:
+                        # this obscure piece of code will strip the
+                        # lines starting with #, but only *after* the
+                        # first line, which needs to carry down to the
+                        # regular parser
+                        i = 1
+                        while i < len(lines):
+                                if lines[1].startswith('#'):
+                                        del lines[1]
+                                        i+=1
+                                else:
+                                        break
+                        # we then process this as regular wiki markup, unfortunately
+                        parser_name = 'wiki'
+                        log("warning: page %s uses the %s parser, unsupported" % (self.page.page_name, parser_name))
+                if parser_name == 'wiki':
+                        return text_html.Formatter.parser(self, 'wiki', lines)
+                raise NotImplementedError("parser not fully implemented " + parser_name)
+                #raise NotImplementedError("maybe just use parent implementation?")
+
+class FakeUser(user.User):
+	def __init__(self, request):
+		user.User.__init__(self, request)
+		self.valid = True
+
+class MoinHtmlScript(MoinScript):
+        def __init__(self, argv=None):
+                MoinScript.__init__(self, argv)
+                self.parser.remove_option('--page')
+                self.parser.add_option(
+                        '-p', '--page', dest="page", default=[], action='append',
+                        help="wiki page name, can be used multiple times [default: all pages]"
+                        )
+                self.parser.add_option(
+                        '-r', '--repository', dest="repository", default='.',
+                        help="path to the git repository created with moin2git"
+                        )
+                self.parser.add_option(
+                        '-u', '--underlay', dest="underlay", default=False, action='store_true',
+                        help="import the MoinMoin underlay too"
+                        )
+                self.parser.add_option(
+                        '-D', '--deleted', dest="deleted", default=False, action='store_true',
+                        help="include deleted pages [default: no]"
+                        )
+
+        def mainloop(self):
+                self.init_request()
+
+                if self.options.page:
+                        self.options.page = map(lambda x: x.decode('utf-8'), self.options.page)
+                else:
+                        log("loading full page list")
+                        self.options.page = self.request.rootpage.getPageList(user='', exists=not self.options.deleted, include_underlay=self.options.underlay)
+
+                r = self.request
+                r.user = FakeUser(r)
+                f = MarkdownFormatter(r)
+                r.formatter = f
+
+                self.pagecount = 0
+                self.totalpagecount = len(self.options.page)
+
+                for page in self.options.page:
+                        self.pagecount += 1
+                        sys.stderr.write("\rprocessing page %d/%d" % (self.pagecount, self.totalpagecount));
+                        mdwnpage = self.options.repository + '/' + page.replace(' ', '_') + '.mdwn'
+                        moinpage = self.options.repository + '/' + page.replace(' ', '_') + '.moin'
+                        sys.stdout = open(mdwnpage, 'w')
+                        f.setPage(Page.Page(r, page))
+                        parser = text_moin_wiki.Parser(file(moinpage).read().decode('utf-8'), r, line_anchors=False)
+                        f._tmp_parser = parser
+                        try:
+                                parser.format(f)
+                        except:
+                                log("\nexception occured in page %s, aborting" % page)
+                                raise
+                        sys.stdout.write(f.dump_footnotes().encode('utf-8'))
+                log("\nprocessing finished")
+                if len(f.templates_patterns):
+                        log("detected the following template patterns to configure:")
+                        for template, paths in f.templates_patterns.iteritems():
+                                log("%s => %s" % (template, ",".join(paths)))
+                if len(f.interwiki_missing):
+                        log("detected the following missing interwiki links:" + ",".join(f.interwiki_missing))
+
+
+if __name__ == '__main__': MoinHtmlScript().run()
