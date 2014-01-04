@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # I'm a Moin, but I can change. If I have to. I guess.
 
-import sys, re, subprocess, os, urllib, hashlib, resource
+import sys, re, subprocess, os, os.path, urllib, hashlib, resource
 from time import time as timestamp
 from MoinMoin.logfile.editlog import EditLog
 from MoinMoin.action import AttachFile
@@ -12,7 +12,28 @@ from MoinMoin.script import MoinScript
 from MoinMoin.config.multiconfig import DefaultConfig
 from MoinMoin.script import log
 
+
+filename_re = """\([0-9a-fA-F]+\)"""
+
+def fix_filename(f):
+    def replace(x):
+        chars = x.group(0)[1:-1]
+        r = ''
+        for i in xrange(0, len(chars), 2):
+            r += chr(int(chars[i:i + 2], 16))
+        return r
+    return re.sub(filename_re, replace, f).decode('utf-8')
+
+def page_exists(fname):
+    if os.path.exists(os.path.join("data", "pages", fname, "current")):
+        current = open(os.path.join("data", "pages", fname, "current")).read().strip()
+        if os.path.exists(os.path.join("data", "pages", fname, "revisions", current)):
+            return True
+    return False
+
 sys.path.insert(0, '.')
+
+commits = {}
 
 class IkiwikiMigScript(MoinScript):
         """\
@@ -103,6 +124,14 @@ This script does not write to the original MoinMoin wiki."""
                 else:
                         log("loading full page list")
                         self.options.page = self.request.rootpage.getPageList(user='', exists=not self.options.deleted, include_underlay=self.options.underlay)
+                        log("Loaded %s initial pages" % len(self.options.page))
+                        for fname in os.listdir("data/pages"):
+                            if page_exists(fname):
+                                page = fix_filename(fname)
+                                self.options.page.append(page)
+                        self.options.page = sorted(set(self.options.page))
+                        log("Found %s total pages" % len(self.options.page))
+                        log("MyStartingPage: %s" % ('MyStartingPage' in self.options.page))
 
                 # first pass: create the blobs and the self.commits structure
                 self.totalpagecount = len(self.options.page)
@@ -111,6 +140,8 @@ This script does not write to the original MoinMoin wiki."""
                 log('') # add a newline because the progress indicator won't
 
                 # second pass: order the self.commits structure and creates the commits
+                self.files_present = set()
+                self.renamed_from = {}
                 self.totalcommitcount = len(self.commits)
                 log("generating branch of %d commits" % self.totalcommitcount)
                 for time in sorted(self.commits.keys()):
@@ -145,30 +176,51 @@ delete: a file name to delete (optional)
                 out += "data <<EOF\n"
                 if 'comment' in commit:
                         out += commit['comment']
+                elif 'blob' in commit:
+                    for sha1, fname in commit['blob'].iteritems():
+                        if sha1 in commits:
+                            out += "File %s, revision %d" % (fname, commits[sha1])
+                        else:
+                            out += "Change to file %s" % (fname,)
+
                 out += "\nEOF\n"
                 if 'blob' in commit:
                         for blob, basename in commit['blob'].iteritems():
                                 out += "M 644 %s \"%s\"\n" % (blob, basename.replace(' ', '_'))
+                                self.files_present.add(basename.replace(' ', '_'))
+                                #log("\nUpdating file %s" % (basename.replace(' ', '_')))
                 if 'rename' in commit:
                         old, new = commit['rename']
-                        if new in self.renames:
-                                if self.options.debug: log("removing rename target %s" % new)
-                                del self.renames[new] # we have a target again, bring it back
+                        # if new in self.renames:
+                        #        if self.options.debug: log("removing rename target %s" % new)
+                        #        del self.renames[new] # we have a target again, bring it back
                         # check if the original page really really exists
                         o = old
-                        while o in self.renames:
-                               o = self.renames[o]
-                        if o == old:
-                                self.renames[old] = new
-                                out += "R \"%s\" \"%s\"\n" % (commit['rename'][0].replace(' ', '_'),
-                                                              commit['rename'][1].replace(' ', '_'))
-                        # otherwise the page may have been renamed twice, try to find the original copy
+                        while o in self.renamed_from:
+                              o = self.renamed_from[o]
+                        self.files_present.add(new)
+                        if o.replace(' ', '_') not in self.files_present:
+                            log("\nInvalid rename: %s -> %s\n" % (o, new))
                         else:
-                                if self.options.debug: log("looked up replacement for old %s, it's %s, renaming to %s" % (old, o, new))
-                                out += "C \"%s\" \"%s\"\n" % (o.replace(' ', '_'), new.replace(' ', '_'))
-                        if self.options.debug: log("renames: " + repr(self.renames))
+                            #log("\nRename: %s -> ... -> %s -> %s\n" % (old, o, new))
+                            self.files_present.remove(o.replace(' ', '_'))
+                            self.files_present.add(new.replace(' ', '_'))
+                            #if o == old:
+                            self.renamed_from[new] = o
+                            out += "R \"%s\" \"%s\"\n" % (o.replace(' ', '_'),
+                                                          new.replace(' ', '_'))
+                            # otherwise the page may have been renamed twice, try to find the original copy
+                            # else:
+                            #          log("looked up replacement for old %s, it's %s, renaming to %s" % (old, o, new))
+                            #          out += "C \"%s\" \"%s\"\n" % (o.replace(' ', '_'), new.replace(' ', '_'))
+                            if self.options.debug: log("renames: " + repr(self.renames))
                 if 'delete' in commit:
-                        out += "D \"%s\"\n" % commit['delete'].replace(' ', '_')
+                        if commit['delete'].replace(' ', '_') in self.files_present:
+                            self.files_present.remove(commit['delete'].replace(' ', '_'))
+                            out += "D \"%s\"\n" % commit['delete'].replace(' ', '_')
+                        else:
+                            pass
+                            #log("\nNot sure about deleting file: %s" % commit['delete'].replace(' ', '_'))
                 out += "\n"
                 self.output.write(out)
 
@@ -214,12 +266,12 @@ delete: a file name to delete (optional)
 
                         # old-style renames
                         if line.action == 'SAVENEW' and long(line.rev) > 1 and previouspath != basename and previouspath is not None:
-                                commit['rename'] = (previouspath + ".moin", basename + ".moin")
+                                commit['rename'] = (previouspath + ".md", basename + ".md")
                                 self.commits[idx] = commit
                                 if self.options.debug: log("rename %s -> %s in %s" % (previouspath.decode('utf-8'), basename.decode('utf-8'), idx))
                         # new renames
                         elif line.action == 'SAVE/RENAME':
-                                commit['rename'] = (line.extra + ".moin", basename + ".moin")
+                                commit['rename'] = (line.extra + ".md", basename + ".md")
                                 self.commits[idx] = commit
                                 if self.options.debug: log("rename %s -> %s in %s" % (line.extra.decode('utf-8'), basename.decode('utf-8'), idx))
                         # just a new version, but may be a delete
@@ -231,12 +283,14 @@ delete: a file name to delete (optional)
                                         blob += data
                                         if not 'blob' in commit: commit['blob'] = dict()
                                         sha1 = hashlib.sha1("blob %d\0%s" % (len(data), data)).hexdigest()
-                                        commit['blob'][sha1] = basename + ".moin"
+                                        commits[sha1] = long(line.rev)
+                                        commit['blob'][sha1] = basename + ".md"
                                         self.commits[idx] = commit
                                         if self.options.debug: log("blob %s -> %s id: %s" % (sha1, commit['blob'][sha1], idx))
                                 # we assume failure to load the file is because it's been deleted
-                                except IOError:
-                                        commit['delete'] = basename + ".moin"
+                                except IOError as e:
+                                        log("\nError processing %s: %s\n" % (basename, e))
+                                        commit['delete'] = basename + ".md"
                                         self.commits[idx] = commit
                                         continue
                                 blob += "\n"
@@ -286,7 +340,7 @@ delete: a file name to delete (optional)
                                                 # this can happen with old attachments, which were recorded only in the global log
                                                 # XXX: fix this, we could get the commit info from the global log now
                                                 commit['time'] = st.st_mtime
-                                                log("could not find commit for attachment %s, using timestamp %d" % (repr(f), commit['time']))
+                                                log("\ncould not find commit for attachment %s, using timestamp %d" % (repr(f), commit['time']))
                                         data = file(filename).read()
                                         blob = "blob\n"
                                         blob += "data %d\n" % len(data)

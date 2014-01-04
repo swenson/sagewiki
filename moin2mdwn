@@ -1,6 +1,7 @@
 #!/usr/bin/python
-import sys, datetime
-from MoinMoin.formatter import text_html, FormatterBase
+import os, os.path, re, sys, datetime
+import cStringIO as StringIO
+from MoinMoin.formatter import text_html, text_python, FormatterBase
 from MoinMoin.action import AttachFile
 from MoinMoin.parser import text_moin_wiki
 from MoinMoin import Page, user, wikiutil
@@ -8,16 +9,37 @@ from MoinMoin.script import MoinScript
 from MoinMoin.script import log
 sys.path.insert(0, '.')
 
+filename_re = """\([0-9a-fA-F]+\)"""
+
+def fix_filename(f):
+    def replace(x):
+        chars = x.group(0)[1:-1]
+        r = ''
+        for i in xrange(0, len(chars), 2):
+            r += chr(int(chars[i:i + 2], 16))
+        return r
+    return re.sub(filename_re, replace, f).decode('utf-8')
+
+def page_exists(fname):
+    if os.path.exists(os.path.join("data", "pages", fname, "current")):
+        current = open(os.path.join("data", "pages", fname, "current")).read().strip()
+        if os.path.exists(os.path.join("data", "pages", fname, "revisions", current)):
+            return True
+    return False
+
+
 smiley_subst = {
     "<!>":  "[!]",
 }
+
+broken_files = open('broken.txt', 'w')
 
 # TODO
 # - import the interwiki map in the shortcuts page
 # - dictcolumns
 class MarkdownFormatter(text_html.Formatter):
         macro_subst = {
-                'tableofcontents': 'toc',
+                'tableofcontents': '_TOC_',
                 'navigation': 'inline',
                 'datetime': None,
                 'date': None,
@@ -43,7 +65,13 @@ class MarkdownFormatter(text_html.Formatter):
                 'sql': 'sql',
                 'php': 'php',
                 'xml': 'xml',
-                'perl': 'perl'
+                'perl': 'perl',
+                'python': 'python',
+                'cplusplus': 'cpp',
+                'latex': 'latex',
+                'java': 'java',
+                'sh': 'sh',
+                'c': 'c'
                 }
         footnotes = []
 
@@ -82,11 +110,11 @@ class MarkdownFormatter(text_html.Formatter):
 
         # Links ##############################################################
 
-	def pagelink(self, on, pagename='', page=None, **kw):
-                if on:
-                        return '[['
-                else:
-                        return '|' + pagename + ']]'
+    # def pagelink(self, on, pagename='', page=None, **kw):
+ #                if on:
+ #                        return '[[aa'
+ #                else:
+ #                        return 'bb|' + pagename + ']]'
 
         def interwikilink(self, on, interwiki='', pagename='', **kw):
                 """ calls pagelink() for internal interwikilinks
@@ -103,15 +131,15 @@ class MarkdownFormatter(text_html.Formatter):
                         return '"]]'
 
 
-        def url(self, on, url=None, css=None, **kw):
-                if on:
-                        self._url_cache = url
-                        return '[['
-                else:
-                        if not url:
-                                url = self._url_cache
-                        self._url_cache = None
-                        return '' + ('|' + url + ']]' if url else "]]")
+        # def url(self, on, url=None, css=None, **kw):
+        #         if on:
+        #                 self._url_cache = url
+        #                 return '['
+        #         else:
+        #                 if not url:
+        #                         url = self._url_cache
+        #                 self._url_cache = None
+        #                 return ']' + ('(' + url + ')' if url else "")
 
         # Attachments ######################################################
 	def attachment_link(self, on, url=None, **kw):
@@ -178,9 +206,9 @@ class MarkdownFormatter(text_html.Formatter):
         def code_area(self, on, code_id, code_type='txt', show=0, start=-1, step=-1, msg=None):
                 log("args to code_area: code_id: %s, code_type: %s, show=%s, start=%s, step=%s, msg=%s"  % (code_id, code_type, show, start, step, msg))
                 if on:
-                        return '[[!format %s """%s' % (code_type, "\n")
+                        return '```%s """%s' % (code_type, "\n")
                 else:
-                        return '"""]]'
+                        return '"""```'
 
         def code_line(self, on): return ''
         def code_token(self, tok_text, tok_type): return ''
@@ -213,9 +241,9 @@ class MarkdownFormatter(text_html.Formatter):
                         try:
                                 return "\n" + self._indent_spaces() + ("* " if self._tmp_parser.list_types[-1] == 'ul' else '1. ')
                         except IndexError:
-                                if kw['style'] == 'list-style-type:none':
+                                if kw.get('style', '') == 'list-style-type:none':
                                         # just guessing: some random list without proper markup, trying bullet
-                                        log("warning: bizarre list here")
+                                        log("\nwarning: bizarre list here")
                                         return "\n * "
                 self.no_p = 0
                 return ''
@@ -230,7 +258,8 @@ class MarkdownFormatter(text_html.Formatter):
         def table(self, on, attrs=None, **kw):
                 self.in_table = on
                 self.no_p = on
-                return ["[[!table header=\"no\" class=\"mointable\" data=\"\"\"\n", "\"\"\"]]\n"][not on]
+                return ''
+                #return ["[[!table header=\"no\" class=\"mointable\" data=\"\"\"\n", "\"\"\"]]\n"][not on]
 
         def table_row(self, on, attrs=None, **kw):
                 if on:
@@ -242,13 +271,12 @@ class MarkdownFormatter(text_html.Formatter):
 
         def table_cell(self, on, attrs=None, **kw):
                 if on:
-                        if 'colspan' in attrs:
+                        # kinda broken
+                        if 'colspan' in attrs or 'rowspan' in attrs:
                                 # If this will span multiples, we have to set the 'off' text appropriately.
                                 pipecount = int(attrs['colspan'].strip('"'))
                                 if pipecount > 1:
                                         self.pendingcell += '|' * pipecount
-                        if 'rowspan' in attrs:
-                                raise NotImplementedError("rowspan not implemented")
                         if self.tablecolnum == 0:
                                 self.tablecolnum += 1
                                 # We don't start the line with a pipe symbol
@@ -293,7 +321,7 @@ class MarkdownFormatter(text_html.Formatter):
                                                 depth = int(args_list[1].strip())
                                                 exclude = ' and !' + parent + ('/*' * (depth +1))
                                         except:
-                                                log("warning: non-integer second argument to Navigation macro: %s" % args_list[1])
+                                                log("\nwarning: non-integer second argument to Navigation macro: %s" % args_list[1])
                                                 pass
                                 return '[[!map pages="%s/*%s"]]' % (parent, exclude)
                         else:
@@ -303,7 +331,7 @@ class MarkdownFormatter(text_html.Formatter):
                         if len(args_list) > 0:
                                 extra += ' pages="%s/*"' % args_list[0]
                         if len(args_list) > 1:
-                                log("warning: extra parameters not implemented in macro MonthCalendar: " + ",".join(args_list[1:]))
+                                log("\nwarning: extra parameters not implemented in macro MonthCalendar: " + ",".join(args_list[1:]))
                                 # XXX: consider this: http://ikiwiki.info/todo/Javascript_calendar/
                         return '[[!calendar type="month"%s]]' % extra
                 if name.lower() == 'anchor':
@@ -351,7 +379,7 @@ class MarkdownFormatter(text_html.Formatter):
                         return '[[!inline pages="!page(%s/*) and glob(%s/*)" quick archive="yes" feeds="no"]]' % (self.page.page_name.replace(" ", "_"), self.page.page_name.replace(" ", "_"))
                 if name.lower() == 'fullsearch' or name.lower() == 'fullsearchcached':
                         if not args:
-                                log("warning: not generating a search form")
+                                log("\nwarning: not generating a search form")
                                 return ''
                         else:
                                 params = []
@@ -371,7 +399,7 @@ class MarkdownFormatter(text_html.Formatter):
                                         elif mode.startswith('l') or mode.startswith('cat'):
                                                 param += 'link(%s)' % pattern
                                         elif mode.startswith('f') or mode.startswith('r'):
-                                                log("warning: generating a link search instead of full seach for pattern %s" % pattern)
+                                                log("\nwarning: generating a link search instead of full seach for pattern %s" % pattern)
                                                 param += 'link(%s)' % pattern
                                         else:
                                                 # missing: case: regex: language: mimetype: domain:
@@ -381,18 +409,18 @@ class MarkdownFormatter(text_html.Formatter):
                                 return '[[!inline pages="%s" quick feeds="no" archive="yes"]]' % " and ".join(params)
                 if name.lower() == 'include':
                         if len(args_list) > 1:
-                                log("warning: discarding arguments after the pagespec in inline: " + " ".join(args_list[1:]))
-                        return '[[!inline pages="%s" quick="yes" raw="yes"]]' % args_list[0]
+                                log("\nwarning: discarding arguments after the pagespec in inline: " + " ".join(args_list[1:]))
+                        return '[[include:%s]]' % args_list[0]
                 if name.lower() == 'recentchanges':
                         return '[[!inline pages="internal(recentchanges/change_*) and !*/Discussion" template=recentchanges show=0]]'
                 if name.lower() in ['dictcolumns', 'randompage', 'advancedsearch', 'goto', 'gallery', 'searchinpagesandsort', 'icon']: # skip those
-                        log("warning: skipping macro <<%s(%s)>>" % (name, args))
+                        log("\nwarning: skipping macro <<%s(%s)>>" % (name, args))
                         return ''
                 if not name.lower() in self.macro_subst:
                         raise NotImplementedError("macro <<%s(%s)>> unknown in Ikiwiki" % (name, args))
                 m = self.macro_subst.get(name.lower())
                 if m:
-                        return "[[!%s %s]]" % (m, args if args else "")
+                        return "[[%s%s]]" % (m, " " + args if args else "")
                 else:
                         return args if args else ""
 
@@ -403,7 +431,7 @@ class MarkdownFormatter(text_html.Formatter):
                 elif parser_name in self.parser_subst:
                         fmt = self.parser_subst[parser_name]
                 if fmt:
-                        return '[[!format %s """%s"""]]' % (fmt, "\n" + "\n".join(lines) + "\n")
+                        return '```%s\n%s\n```' % (fmt, "\n".join(lines))
                 if parser_name in ['sidebar', 'section', 'figure']:
                         # this obscure piece of code will strip the
                         # lines starting with #, but only *after* the
@@ -421,6 +449,11 @@ class MarkdownFormatter(text_html.Formatter):
                         log("warning: page %s uses the %s parser, unsupported" % (self.page.page_name, parser_name))
                 if parser_name == 'wiki':
                         return text_html.Formatter.parser(self, 'wiki', lines)
+                if parser_name == 'sagecell':
+                        return '''
+<div class="sagecellraw">%s</div>
+''' % ("\n".join(lines),)
+
                 raise NotImplementedError("parser not fully implemented " + parser_name)
                 #raise NotImplementedError("maybe just use parent implementation?")
 
@@ -458,6 +491,14 @@ class MoinHtmlScript(MoinScript):
                 else:
                         log("loading full page list")
                         self.options.page = self.request.rootpage.getPageList(user='', exists=not self.options.deleted, include_underlay=self.options.underlay)
+                        log("Loaded %s initial pages" % len(self.options.page))
+                        for fname in os.listdir("data/pages"):
+                            if page_exists(fname):
+                                page = fix_filename(fname)
+                                self.options.page.append(page)
+                        self.options.page = sorted(set(self.options.page))
+                        log("Found %s total pages" % len(self.options.page))
+
 
                 r = self.request
                 r.user = FakeUser(r)
@@ -467,20 +508,37 @@ class MoinHtmlScript(MoinScript):
                 self.pagecount = 0
                 self.totalpagecount = len(self.options.page)
 
+                def hack(s):
+                    return s.replace("<<Navigation(slides)>>", "").replace("<<Navigation(slideshow)>>", "")
+
                 for page in self.options.page:
                         self.pagecount += 1
                         sys.stderr.write("\rprocessing page %d/%d" % (self.pagecount, self.totalpagecount));
-                        mdwnpage = self.options.repository + '/' + page.replace(' ', '_') + '.mdwn'
-                        moinpage = self.options.repository + '/' + page.replace(' ', '_') + '.moin'
-                        sys.stdout = open(mdwnpage, 'w')
-                        f.setPage(Page.Page(r, page))
-                        parser = text_moin_wiki.Parser(file(moinpage).read().decode('utf-8'), r, line_anchors=False)
-                        f._tmp_parser = parser
+                        mdwnpage = self.options.repository + '/' + page.replace(' ', '_') + '.md'
+                        if not os.path.exists(mdwnpage):
+                            log("\ncould not find %s... skipping for now and marking as broken" % (mdwnpage,))
+                            broken_files.write("%s\n" % page.encode("utf-8"))
+                            continue
+
+                        with open(mdwnpage) as current_in:
+                            current = current_in.read()
+
+                        try:
+                            sys.stdout = open(mdwnpage, 'w')
+                            f.setPage(Page.Page(r, page))
+                            parser = text_moin_wiki.Parser(hack(current).decode('utf-8'), r, line_anchors=False)
+                            f._tmp_parser = parser
+                        except Exception as e:
+                            log("\ncould not read %s... continuing because %s" % (mdwnpage, e))
+                            broken_files.write("%s\n" % page.encode("utf-8"))
+                            continue
+
                         try:
                                 parser.format(f)
-                        except:
-                                log("\nexception occured in page %s, aborting" % page)
-                                raise
+                        except Exception as e:
+                                log("\nexception occured in page %s, aborting because %s\n" % (page, e))
+                                broken_files.write("%s\n" % page.encode("utf-8"))
+                                continue
                         sys.stdout.write(f.dump_footnotes().encode('utf-8'))
                 log("\nprocessing finished")
                 if len(f.templates_patterns):
@@ -491,4 +549,8 @@ class MoinHtmlScript(MoinScript):
                         log("detected the following missing interwiki links:" + ",".join(f.interwiki_missing))
 
 
-if __name__ == '__main__': MoinHtmlScript().run()
+if __name__ == '__main__':
+    try:
+        MoinHtmlScript().run()
+    finally:
+        broken_files.close()
