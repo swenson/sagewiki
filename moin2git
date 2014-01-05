@@ -8,6 +8,7 @@
 # I'm a Moin, but I can change. If I have to. I guess.
 
 import sys, re, subprocess, os, os.path, urllib, hashlib, resource
+sys.path.append('.')
 from time import time as timestamp
 from MoinMoin.logfile.editlog import EditLog
 from MoinMoin.action import AttachFile

@@ -13,9 +13,14 @@ opaque = 'b6c7d88eaa93538d264f16282a54d7c6c90556c13580337759ab7ce9e598e215'
 gollum_path = File.expand_path(repo)
 Precious::App.set(:gollum_path, gollum_path)
 Precious::App.set(:default_markup, :markdown)
-Precious::App.set(:wiki_options, {:live_preview => false, :universal_toc => false,
+Precious::App.set(:wiki_options, {:live_preview => false,
+                                  :universal_toc => false,
                                   :allow_uploads => true,
-                                  :mathjax => true})
+                                  :mathjax => true,
+                                  :css => true,
+                                  :js => true,
+                                  :repo_is_bare => true
+                                  })
 
 public = Precious::App
 

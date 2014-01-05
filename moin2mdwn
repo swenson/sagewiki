@@ -1,10 +1,12 @@
 #!/usr/bin/python
+# -*- coding: utf-8 -*-
 
 # Copyright 2014 Christopher Swenson (chris@caswenson.com)
 # Copyright 2013 Antoine Beaupré (anarcat@anarcat.ath.cx)
 # Copyright 2012 Josh Triplett (josh@joshtriplett.org)
 
 import os, os.path, re, sys, datetime
+sys.path.append('.')
 import cStringIO as StringIO
 from MoinMoin.formatter import text_html, text_python, FormatterBase
 from MoinMoin.action import AttachFile
@@ -455,9 +457,7 @@ class MarkdownFormatter(text_html.Formatter):
                 if parser_name == 'wiki':
                         return text_html.Formatter.parser(self, 'wiki', lines)
                 if parser_name == 'sagecell':
-                        return '''
-<div class="sagecellraw">%s</div>
-''' % ("\n".join(lines),)
+                        return '\n'.join(['<div class="sagecellraw">'] + lines[1:] + ['</div>'])
 
                 raise NotImplementedError("parser not fully implemented " + parser_name)
                 #raise NotImplementedError("maybe just use parent implementation?")
