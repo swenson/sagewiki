@@ -56,14 +56,18 @@ protected = Rack::Auth::Digest::MD5.new(public, {:realm => realm, :opaque => opa
   auth.passes["#{username}:#{realm}"]
 end
 
-# run Rack::URLMap.new({
-#   "/" => public,
-#   "/edit" => protected,
-#   "/create" => protected,
-#   "/delete" => protected,
-#   "/rename" => protected,
-#   "/revert" => protected,
-#   "/uploadFile" => protected
-# })
+class Wrapper
+  def initialize(pub, priv)
+    @pub = pub
+    @priv = priv
+  end
+  def call(env)
+    if env['PATH_INFO'] =~ /^\/(edit|create|delete|rename|revert|uploadFile)/
+      @priv.call(env)
+    else
+      @pub.call(env)
+    end
+  end
+end
 
-run public
+run Wrapper.new(public, protected)
