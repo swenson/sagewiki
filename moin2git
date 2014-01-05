@@ -1,5 +1,10 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
+
+# Copyright 2014 Christopher Swenson (chris@caswenson.com)
+# Copyright 2013 Antoine Beaupré (anarcat@anarcat.ath.cx)
+# Copyright 2012 Josh Triplett (josh@joshtriplett.org)
+
 # I'm a Moin, but I can change. If I have to. I guess.
 
 import sys, re, subprocess, os, os.path, urllib, hashlib, resource

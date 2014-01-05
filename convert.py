@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+# Copyright 2014 Christopher Swenson (chris@caswenson.com)
+
 import glob
 import os
 import os.path

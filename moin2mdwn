@@ -1,4 +1,9 @@
 #!/usr/bin/python
+
+# Copyright 2014 Christopher Swenson (chris@caswenson.com)
+# Copyright 2013 Antoine Beaupré (anarcat@anarcat.ath.cx)
+# Copyright 2012 Josh Triplett (josh@joshtriplett.org)
+
 import os, os.path, re, sys, datetime
 import cStringIO as StringIO
 from MoinMoin.formatter import text_html, text_python, FormatterBase

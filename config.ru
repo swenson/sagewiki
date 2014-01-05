@@ -1,4 +1,7 @@
 #!/usr/bin/env ruby
+
+# Copyright 2014 Christopher Swenson (chris@caswenson.com)
+
 require 'rubygems'
 require 'gollum/app'
 
