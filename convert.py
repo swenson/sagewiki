@@ -2,10 +2,14 @@
 # -*- coding: utf-8 -*-
 
 # Copyright 2014 Christopher Swenson (chris@caswenson.com)
+import os
+import sys
+sys.path.append('.')
+sys.path.append('unidecode')
 
 import glob
-import os
 import os.path
+import unidecode
 import wikiconfig
 
 config = wikiconfig.Config("wikiconfig")
@@ -123,3 +127,13 @@ os.chdir('test')
 os.system("git add _Header.md custom.css custom.js")
 os.system("git commit -a -m \"Add header, custom css and js\"")
 os.chdir('..')
+
+for file in os.listdir("test"):
+  new_file = unidecode.unidecode(file)
+  if file != new_file:
+    written = True
+    file, unidecode.unidecode(file)
+    os.chdir('test')
+    os.system('git mv "%s" "%s"' % (file, new_file))
+    os.system('git commit -a -m "Moving file because Unicode"')
+    os.chdir('..')
