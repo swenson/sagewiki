@@ -7,7 +7,14 @@
 
 # I'm a Moin, but I can change. If I have to. I guess.
 
-import sys, re, subprocess, os, os.path, urllib, hashlib, resource
+import sys
+import re
+import os
+import os.path
+import urllib
+import hashlib
+import resource
+
 sys.path.append('.')
 from time import time as timestamp
 from MoinMoin.logfile.editlog import EditLog
@@ -15,11 +22,11 @@ from MoinMoin.action import AttachFile
 from MoinMoin.user import User
 from MoinMoin.Page import Page
 from MoinMoin.script import MoinScript
-from MoinMoin.config.multiconfig import DefaultConfig
 from MoinMoin.script import log
 
 
 filename_re = """\([0-9a-fA-F]+\)"""
+
 
 def fix_filename(f):
     def replace(x):
@@ -28,7 +35,9 @@ def fix_filename(f):
         for i in xrange(0, len(chars), 2):
             r += chr(int(chars[i:i + 2], 16))
         return r
+
     return re.sub(filename_re, replace, f).decode('utf-8')
+
 
 def page_exists(fname):
     if os.path.exists(os.path.join("data", "pages", fname, "current")):
@@ -37,12 +46,14 @@ def page_exists(fname):
             return True
     return False
 
+
 sys.path.insert(0, '.')
 
 commits = {}
 
+
 class IkiwikiMigScript(MoinScript):
-        """\
+    """\
 Purpose: Migrate from Moinmoin to Ikiwiki
 =========================================
 
@@ -50,10 +61,10 @@ Usage: moin2git2 [ -p page ] | ( cd repo.git ; git fast-import )
 
 This script works in two passes:
 
- 1. inspect every page's history individually and:
-   * create a git "blob" for every version and attachment
-   * generate a list of commits for later
- 2. write the actual commits, in order
+1. inspect every page's history individually and:
+* create a git "blob" for every version and attachment
+* generate a list of commits for later
+2. write the actual commits, in order
 
 This is because the general edit-log is too difficult to parse and
 that we cannot know the global order of commits in the page only.
@@ -75,87 +86,88 @@ can do incremental imports, although this has not been tested
 extensively.
 
 This script does not write to the original MoinMoin wiki."""
-        hex_escape_re = re.compile(r'\(([0-9A-Fa-f]+)\)')
-        commits = dict()
-        renames = dict()
-        # caches and counters, used to track the import progress
-        commitcount = 0
-        totalcommitcount = 0
-        pagecount = 0
-        totalpagecount = 0
+    hex_escape_re = re.compile(r'\(([0-9A-Fa-f]+)\)')
+    commits = dict()
+    renames = dict()
+    # caches and counters, used to track the import progress
+    commitcount = 0
+    totalcommitcount = 0
+    pagecount = 0
+    totalpagecount = 0
 
-        def __init__(self, argv=None):
-                MoinScript.__init__(self, argv)
-                self.parser.remove_option('--page')
-                self.parser.add_option(
-                        '-p', '--page', dest="page", default=[], action='append',
-                        help="wiki page name, can be used multiple times [default: all pages]"
-                        )
-                self.parser.add_option('--timezone', dest="timezone", default="+0000",
-                                       help="timezone the server time was set at [default: UTC]")
-                self.parser.add_option(
-                        '-d', '--debug', dest="debug", default=False, action='store_true',
-                        help="enable debugging, can generate a lot of output"
-                        )
-                self.parser.add_option(
-                        '-u', '--underlay', dest="underlay", default=False, action='store_true',
-                        help="import the MoinMoin underlay too"
-                        )
-                self.parser.add_option(
-                        '-D', '--deleted', dest="deleted", default=False, action='store_true',
-                        help="include deleted pages [default: no]"
-                        )
-                self.parser.add_option(
-                        '--authors', dest="authorsfile", default=None,
-                        help="a list of 'username=Author <email>' mappings to convert MoinMoin authors to email addresses")
-                self.parser.add_option(
-                        '-b', '--branch', dest="branch", default='refs/heads/master',
-                        help="the branch to attach the commits to [default: refs/heads/master]")
-                
-        def mainloop(self, authorsfile=None):
-                self.init_request()
-                self.authors = {}
-                if len(self.args) < 1 or self.args[0] == '-':
-                        self.output = sys.stdout
-                else:
-                        self.output = open(self.args[0], 'wb')
-                if self.options.authorsfile is not None:
-                        for line in file(self.options.authorsfile):
-                                username,author = line.split('=', 1)
-                                name, email = author.rsplit(" ", 1)
-                                self.authors[username] = name, email
+    def __init__(self, argv=None):
+        MoinScript.__init__(self, argv)
+        self.parser.remove_option('--page')
+        self.parser.add_option(
+            '-p', '--page', dest="page", default=[], action='append',
+            help="wiki page name, can be used multiple times [default: all pages]"
+        )
+        self.parser.add_option('--timezone', dest="timezone", default="+0000",
+                               help="timezone the server time was set at [default: UTC]")
+        self.parser.add_option(
+            '-d', '--debug', dest="debug", default=False, action='store_true',
+            help="enable debugging, can generate a lot of output"
+        )
+        self.parser.add_option(
+            '-u', '--underlay', dest="underlay", default=False, action='store_true',
+            help="import the MoinMoin underlay too"
+        )
+        self.parser.add_option(
+            '-D', '--deleted', dest="deleted", default=False, action='store_true',
+            help="include deleted pages [default: no]"
+        )
+        self.parser.add_option(
+            '--authors', dest="authorsfile", default=None,
+            help="a list of 'username=Author <email>' mappings to convert MoinMoin authors to email addresses")
+        self.parser.add_option(
+            '-b', '--branch', dest="branch", default='refs/heads/master',
+            help="the branch to attach the commits to [default: refs/heads/master]")
 
-                if self.options.page:
-                        self.options.page = map(lambda x: x.decode('utf-8'), self.options.page)
-                else:
-                        log("loading full page list")
-                        self.options.page = self.request.rootpage.getPageList(user='', exists=not self.options.deleted, include_underlay=self.options.underlay)
-                        log("Loaded %s initial pages" % len(self.options.page))
-                        for fname in os.listdir("data/pages"):
-                            if page_exists(fname):
-                                page = fix_filename(fname)
-                                self.options.page.append(page)
-                        self.options.page = sorted(set(self.options.page))
-                        log("Found %s total pages" % len(self.options.page))
-                        log("MyStartingPage: %s" % ('MyStartingPage' in self.options.page))
+    def mainloop(self, authorsfile=None):
+        self.init_request()
+        self.authors = {}
+        if len(self.args) < 1 or self.args[0] == '-':
+            self.output = sys.stdout
+        else:
+            self.output = open(self.args[0], 'wb')
+        if self.options.authorsfile is not None:
+            for line in file(self.options.authorsfile):
+                username, author = line.split('=', 1)
+                name, email = author.rsplit(" ", 1)
+                self.authors[username] = name, email
 
-                # first pass: create the blobs and the self.commits structure
-                self.totalpagecount = len(self.options.page)
-                for page in self.options.page:
-                        self.createblobs(page)
-                log('') # add a newline because the progress indicator won't
+        if self.options.page:
+            self.options.page = map(lambda x: x.decode('utf-8'), self.options.page)
+        else:
+            log("loading full page list")
+            self.options.page = self.request.rootpage.getPageList(user='', exists=not self.options.deleted,
+                                                                  include_underlay=self.options.underlay)
+            log("Loaded %s initial pages" % len(self.options.page))
+            for fname in os.listdir("data/pages"):
+                if page_exists(fname):
+                    page = fix_filename(fname)
+                    self.options.page.append(page)
+            self.options.page = sorted(set(self.options.page))
+            log("Found %s total pages" % len(self.options.page))
+            log("MyStartingPage: %s" % ('MyStartingPage' in self.options.page))
 
-                # second pass: order the self.commits structure and creates the commits
-                self.files_present = set()
-                self.renamed_from = {}
-                self.totalcommitcount = len(self.commits)
-                log("generating branch of %d commits" % self.totalcommitcount)
-                for time in sorted(self.commits.keys()):
-                        self.createcommit(self.commits[time])
-                log('')
+        # first pass: create the blobs and the self.commits structure
+        self.totalpagecount = len(self.options.page)
+        for page in self.options.page:
+            self.createblobs(page)
+        log('') # add a newline because the progress indicator won't
 
-        def createcommit(self, commit):
-                """
+        # second pass: order the self.commits structure and creates the commits
+        self.files_present = set()
+        self.renamed_from = {}
+        self.totalcommitcount = len(self.commits)
+        log("generating branch of %d commits" % self.totalcommitcount)
+        for time in sorted(self.commits.keys()):
+            self.createcommit(self.commits[time])
+        log('')
+
+    def createcommit(self, commit):
+        """
 This will write to self.output a fast-import compatible for this commit.
 
 commit is a dictionnary with those fields:
@@ -166,222 +178,231 @@ blob: a dict of sha1 -> filename mappings (optional)
 rename: a tuple (from -> to) (optional)
 delete: a file name to delete (optional)
 """
-                self.commitcount += 1
-                sys.stderr.write("\rcommit: %d/%d" % (self.commitcount, self.totalcommitcount))
-                if self.options.debug: log("\ncommit mark %d: %s" % (self.commitcount, repr(commit)))
-                time = commit['time']
-                out = "commit %s\n" % self.options.branch
-                # commits are marked individually
-                # eases debugging between the dump and the debugging output
-                out += "mark :%d\n" % self.commitcount
-                if 'committer' in commit:
-                        name, email = commit['committer']
+        self.commitcount += 1
+        sys.stderr.write("\rcommit: %d/%d" % (self.commitcount, self.totalcommitcount))
+        if self.options.debug: log("\ncommit mark %d: %s" % (self.commitcount, repr(commit)))
+        time = commit['time']
+        out = "commit %s\n" % self.options.branch
+        # commits are marked individually
+        # eases debugging between the dump and the debugging output
+        out += "mark :%d\n" % self.commitcount
+        if 'committer' in commit:
+            name, email = commit['committer']
+        else:
+            name, email = ("moin2git", "moin2git")
+        out += "committer %s <%s> %d %s\n" % (name, email, time, self.options.timezone)
+        out += "data <<EOF\n"
+        if 'comment' in commit:
+            out += commit['comment']
+        elif 'blob' in commit:
+            for sha1, fname in commit['blob'].iteritems():
+                if sha1 in commits:
+                    out += "File %s, revision %d" % (fname, commits[sha1])
                 else:
-                        name, email = ("moin2git", "moin2git")
-                out += "committer %s <%s> %d %s\n" % (name, email, time, self.options.timezone)
-                out += "data <<EOF\n"
-                if 'comment' in commit:
-                        out += commit['comment']
-                elif 'blob' in commit:
-                    for sha1, fname in commit['blob'].iteritems():
-                        if sha1 in commits:
-                            out += "File %s, revision %d" % (fname, commits[sha1])
-                        else:
-                            out += "Change to file %s" % (fname,)
+                    out += "Change to file %s" % (fname,)
 
-                out += "\nEOF\n"
-                if 'blob' in commit:
-                        for blob, basename in commit['blob'].iteritems():
-                                out += "M 644 %s \"%s\"\n" % (blob, basename.replace(' ', '_'))
-                                self.files_present.add(basename.replace(' ', '_'))
-                                #log("\nUpdating file %s" % (basename.replace(' ', '_')))
-                if 'rename' in commit:
-                        old, new = commit['rename']
-                        # if new in self.renames:
-                        #        if self.options.debug: log("removing rename target %s" % new)
-                        #        del self.renames[new] # we have a target again, bring it back
-                        # check if the original page really really exists
-                        o = old
-                        while o in self.renamed_from:
-                              o = self.renamed_from[o]
-                        self.files_present.add(new)
-                        if o.replace(' ', '_') not in self.files_present:
-                            log("\nInvalid rename: %s -> %s\n" % (o, new))
-                        else:
-                            #log("\nRename: %s -> ... -> %s -> %s\n" % (old, o, new))
-                            self.files_present.remove(o.replace(' ', '_'))
-                            self.files_present.add(new.replace(' ', '_'))
-                            #if o == old:
-                            self.renamed_from[new] = o
-                            out += "R \"%s\" \"%s\"\n" % (o.replace(' ', '_'),
-                                                          new.replace(' ', '_'))
-                            # otherwise the page may have been renamed twice, try to find the original copy
-                            # else:
-                            #          log("looked up replacement for old %s, it's %s, renaming to %s" % (old, o, new))
-                            #          out += "C \"%s\" \"%s\"\n" % (o.replace(' ', '_'), new.replace(' ', '_'))
-                            if self.options.debug: log("renames: " + repr(self.renames))
-                if 'delete' in commit:
-                        if commit['delete'].replace(' ', '_') in self.files_present:
-                            self.files_present.remove(commit['delete'].replace(' ', '_'))
-                            out += "D \"%s\"\n" % commit['delete'].replace(' ', '_')
-                        else:
-                            pass
-                            #log("\nNot sure about deleting file: %s" % commit['delete'].replace(' ', '_'))
-                out += "\n"
-                self.output.write(out)
+        out += "\nEOF\n"
+        if 'blob' in commit:
+            for blob, basename in commit['blob'].iteritems():
+                out += "M 644 %s \"%s\"\n" % (blob, basename.replace(' ', '_'))
+                self.files_present.add(basename.replace(' ', '_'))
+                #log("\nUpdating file %s" % (basename.replace(' ', '_')))
+        if 'rename' in commit:
+            old, new = commit['rename']
+            # if new in self.renames:
+            #        if self.options.debug: log("removing rename target %s" % new)
+            #        del self.renames[new] # we have a target again, bring it back
+            # check if the original page really really exists
+            o = old
+            while o in self.renamed_from:
+                o = self.renamed_from[o]
+            self.files_present.add(new)
+            if o.replace(' ', '_') not in self.files_present:
+                log("\nInvalid rename: %s -> %s\n" % (o, new))
+            else:
+                #log("\nRename: %s -> ... -> %s -> %s\n" % (old, o, new))
+                self.files_present.remove(o.replace(' ', '_'))
+                self.files_present.add(new.replace(' ', '_'))
+                #if o == old:
+                self.renamed_from[new] = o
+                out += "R \"%s\" \"%s\"\n" % (o.replace(' ', '_'),
+                                              new.replace(' ', '_'))
+                # otherwise the page may have been renamed twice, try to find the original copy
+                # else:
+                #          log("looked up replacement for old %s, it's %s, renaming to %s" % (old, o, new))
+                #          out += "C \"%s\" \"%s\"\n" % (o.replace(' ', '_'), new.replace(' ', '_'))
+                if self.options.debug: log("renames: " + repr(self.renames))
+        if 'delete' in commit:
+            if commit['delete'].replace(' ', '_') in self.files_present:
+                self.files_present.remove(commit['delete'].replace(' ', '_'))
+                out += "D \"%s\"\n" % commit['delete'].replace(' ', '_')
+            else:
+                pass
+                #log("\nNot sure about deleting file: %s" % commit['delete'].replace(' ', '_'))
+        out += "\n"
+        self.output.write(out)
 
-        def createblobs(self, page):
-                self.pagecount += 1
-                sys.stderr.write("\rprocessing page %d/%d" % (self.pagecount, self.totalpagecount));
-                r = self.request
-                editlog = EditLog(r, rootpagename=page)
-                time = 0
-                attachments = dict() # file -> commit mapping
-                previouspath = None
-                p = Page(r, page)
-                # we iterate over the page's edit-log because it's more reliable and consistent than the general log
-                for line in editlog:
-                        filename, _, _ = p.get_rev(rev=long(line.rev))
-                        filename = os.path.abspath(filename)
-                        u = User(r, line.userid)
-                        basename = self.translate(line.pagename)
+    def createblobs(self, page):
+        self.pagecount += 1
+        sys.stderr.write("\rprocessing page %d/%d" % (self.pagecount, self.totalpagecount));
+        r = self.request
+        editlog = EditLog(r, rootpagename=page)
+        time = 0
+        attachments = dict() # file -> commit mapping
+        previouspath = None
+        p = Page(r, page)
+        # we iterate over the page's edit-log because it's more reliable and consistent than the general log
+        for line in editlog:
+            filename, _, _ = p.get_rev(rev=long(line.rev))
+            filename = os.path.abspath(filename)
+            u = User(r, line.userid)
+            basename = self.translate(line.pagename)
 
-                        # setup proper username <email> from user account, use IP <hostname> otherwise
-                        if u.exists():
-                                name, email = self.authors.get(u.name, (u.name, u.email))
-                        else:
-                                name, email = (line.addr, line.hostname)
+            # setup proper username <email> from user account, use IP <hostname> otherwise
+            if u.exists():
+                name, email = self.authors.get(u.name, (u.name, u.email))
+            else:
+                name, email = (line.addr, line.hostname)
 
-                        time = line.ed_time_usecs / 10**6
-                        idx = "%d%s" % (time, basename)
-                        if self.options.debug:
-                                log("line: " + line.pagename + " rev: " + line.rev + " idx: " + repr(idx))
+            time = line.ed_time_usecs / 10 ** 6
+            idx = "%d%s" % (time, basename)
+            if self.options.debug:
+                log("line: " + line.pagename + " rev: " + line.rev + " idx: " + repr(idx))
 
-                        # why the fuck.
-                        basename = basename.encode('utf-8')
-                        oldextra = line.extra
-                        line.extra = line.extra.encode('utf-8')
+            # why the fuck.
+            basename = basename.encode('utf-8')
+            oldextra = line.extra
+            line.extra = line.extra.encode('utf-8')
 
-                        # internal commit object
-                        # this object will get added to the self.commits list of commits if relevant, below
-                        commit = {
-                                'time': time,
-                                'committer': (name.encode('utf-8'), email.encode('utf-8'))
-                                }
-                        if len(line.comment) > 0: commit['comment'] = line.comment.encode('utf-8')
+            # internal commit object
+            # this object will get added to the self.commits list of commits if relevant, below
+            commit = {
+                'time': time,
+                'committer': (name.encode('utf-8'), email.encode('utf-8'))
+            }
+            if len(line.comment) > 0: commit['comment'] = line.comment.encode('utf-8')
 
-                        # old-style renames
-                        if line.action == 'SAVENEW' and long(line.rev) > 1 and previouspath != basename and previouspath is not None:
-                                commit['rename'] = (previouspath + ".md", basename + ".md")
-                                self.commits[idx] = commit
-                                if self.options.debug: log("rename %s -> %s in %s" % (previouspath.decode('utf-8'), basename.decode('utf-8'), idx))
-                        # new renames
-                        elif line.action == 'SAVE/RENAME':
-                                commit['rename'] = (line.extra + ".md", basename + ".md")
-                                self.commits[idx] = commit
-                                if self.options.debug: log("rename %s -> %s in %s" % (line.extra.decode('utf-8'), basename.decode('utf-8'), idx))
-                        # just a new version, but may be a delete
-                        elif line.action in ['SAVENEW', 'SAVE', 'SAVE/REVERT']:
-                                blob = "blob\n"
-                                try:
-                                        data = file(filename).read()
-                                        blob += "data %d\n" % len(data)
-                                        blob += data
-                                        if not 'blob' in commit: commit['blob'] = dict()
-                                        sha1 = hashlib.sha1("blob %d\0%s" % (len(data), data)).hexdigest()
-                                        commits[sha1] = long(line.rev)
-                                        commit['blob'][sha1] = basename + ".md"
-                                        self.commits[idx] = commit
-                                        if self.options.debug: log("blob %s -> %s id: %s" % (sha1, commit['blob'][sha1], idx))
-                                # we assume failure to load the file is because it's been deleted
-                                except IOError as e:
-                                        log("\nError processing %s: %s\n" % (basename, e))
-                                        commit['delete'] = basename + ".md"
-                                        self.commits[idx] = commit
-                                        continue
-                                blob += "\n"
-                                self.output.write(blob)
-                        elif line.action in ['ATTNEW']:
-                                # keep the last commit for the attachment as the right one
-                                # we are forced to do this because attachments are not versionned in MoinMoin
-                                if self.options.debug: log("old extra %s unquoted %s final %s" % (repr(oldextra), repr(urllib.unquote(oldextra)), repr(f)))
-                                # store related commit in attachment table for when we process that page's attachment blobs
-                                # convert attachment filename from latin-1 to utf-8
-                                attachments[urllib.unquote(oldextra).encode('latin1').decode('utf-8')] = commit
-                        elif not line.action in ['ATTDRW', 'ATTDEL']: # ignored actions
-                                log("Unknown action: "+line.action)
-                        previouspath = basename # keep track of the previous page name for old-style renames
+            # old-style renames
+            if line.action == 'SAVENEW' and long(
+                    line.rev) > 1 and previouspath != basename and previouspath is not None:
+                commit['rename'] = (previouspath + ".md", basename + ".md")
+                self.commits[idx] = commit
+                if self.options.debug: log(
+                    "rename %s -> %s in %s" % (previouspath.decode('utf-8'), basename.decode('utf-8'), idx))
+            # new renames
+            elif line.action == 'SAVE/RENAME':
+                commit['rename'] = (line.extra + ".md", basename + ".md")
+                self.commits[idx] = commit
+                if self.options.debug: log(
+                    "rename %s -> %s in %s" % (line.extra.decode('utf-8'), basename.decode('utf-8'), idx))
+            # just a new version, but may be a delete
+            elif line.action in ['SAVENEW', 'SAVE', 'SAVE/REVERT']:
+                blob = "blob\n"
+                try:
+                    data = file(filename).read()
+                    blob += "data %d\n" % len(data)
+                    blob += data
+                    if not 'blob' in commit: commit['blob'] = dict()
+                    sha1 = hashlib.sha1("blob %d\0%s" % (len(data), data)).hexdigest()
+                    commits[sha1] = long(line.rev)
+                    commit['blob'][sha1] = basename + ".md"
+                    self.commits[idx] = commit
+                    if self.options.debug: log("blob %s -> %s id: %s" % (sha1, commit['blob'][sha1], idx))
+                # we assume failure to load the file is because it's been deleted
+                except IOError as e:
+                    log("\nError processing %s: %s\n" % (basename, e))
+                    commit['delete'] = basename + ".md"
+                    self.commits[idx] = commit
+                    continue
+                blob += "\n"
+                self.output.write(blob)
+            elif line.action in ['ATTNEW']:
+                # keep the last commit for the attachment as the right one
+                # we are forced to do this because attachments are not versionned in MoinMoin
+                if self.options.debug: log(
+                    "old extra %s unquoted %s final %s" % (repr(oldextra), repr(urllib.unquote(oldextra)), repr(f)))
+                # store related commit in attachment table for when we process that page's attachment blobs
+                # convert attachment filename from latin-1 to utf-8
+                attachments[urllib.unquote(oldextra).encode('latin1').decode('utf-8')] = commit
+            elif not line.action in ['ATTDRW', 'ATTDEL']: # ignored actions
+                log("Unknown action: " + line.action)
+            previouspath = basename # keep track of the previous page name for old-style renames
 
-                # attachment handling
-                files = AttachFile._get_files(r, page)
-                if self.options.debug: log("attachment mapping: " + repr(attachments))
-                if (len(files) > 0):
-                        if not time: time = timestamp()
-                        for f in files:
-                                commit = dict()
-                                # this is temporary files like gallery
-                                if f.startswith('tmp.thumbnail.') \
-                                            or f.startswith('tmp.webnail.') \
-                                            or f in ['delete.me.to.regenerate.thumbnails.and.webnails', 'tmp.writetest']:
-                                        if self.options.debug: log("skipping tmp. attachment: " + f)
-                                        continue
-                                if f.endswith('.tdraw'):
-                                        log("skipping .tdraw attachment: " + f)
-                                        continue
+        # attachment handling
+        files = AttachFile._get_files(r, page)
+        if self.options.debug: log("attachment mapping: " + repr(attachments))
+        if (len(files) > 0):
+            if not time: time = timestamp()
+            for f in files:
+                commit = dict()
+                # this is temporary files like gallery
+                if f.startswith('tmp.thumbnail.') \
+                    or f.startswith('tmp.webnail.') \
+                    or f in ['delete.me.to.regenerate.thumbnails.and.webnails', 'tmp.writetest']:
+                    if self.options.debug: log("skipping tmp. attachment: " + f)
+                    continue
+                if f.endswith('.tdraw'):
+                    log("skipping .tdraw attachment: " + f)
+                    continue
 
-                                idx = "%d%s" % (time, page)
-                                filename = os.path.abspath(AttachFile.getFilename(r, page, f))
-                                if not f in attachments:
-                                        # it could be that this side is latin-1 encoded, which happens for old attachments
-                                        # convert back into utf-8
-                                        f = f.encode('latin-1').decode('utf-8')
-                                if f in attachments:
-                                        commit = attachments[f]
-                                        idx = "%d%s%s" % (commit['time'], page, 'attach')
-                                        if self.options.debug: log("reusing commit with id %s: %s" % (idx, repr(commit)))
-                                try:
-                                        st = os.stat(filename)
-                                        if not 'time' in commit:
-                                                # this means the attachment wasn't found in that page's edit-log
-                                                # this can happen with old attachments, which were recorded only in the global log
-                                                # XXX: fix this, we could get the commit info from the global log now
-                                                commit['time'] = st.st_mtime
-                                                log("\ncould not find commit for attachment %s, using timestamp %d" % (repr(f), commit['time']))
-                                        data = file(filename).read()
-                                        blob = "blob\n"
-                                        blob += "data %d\n" % len(data)
-                                        blob += data
-                                        blob += "\n"
-                                        if not 'blob' in commit: commit['blob'] = dict()
-                                        sha1 = hashlib.sha1("blob %d\0%s" % (len(data), data)).hexdigest()
-                                        commit['blob'][sha1] = os.path.join(page.encode('utf-8'), os.path.basename(filename))
-                                        if self.options.debug: log("blob (attachment on %s) %s -> %s id: %s" % (page, sha1, commit['blob'][sha1].decode('utf-8'), idx))
-                                        self.output.write(blob)
-                                        self.commits[idx] = commit
-                                except OSError as (errno, strerror):
-                                        # no such file or directory means the attachment was deleted
-                                        # everything else should be raised as an exception
-                                        if errno != 2:
-                                                raise
+                idx = "%d%s" % (time, page)
+                filename = os.path.abspath(AttachFile.getFilename(r, page, f))
+                if not f in attachments:
+                    # it could be that this side is latin-1 encoded, which happens for old attachments
+                    # convert back into utf-8
+                    f = f.encode('latin-1').decode('utf-8')
+                if f in attachments:
+                    commit = attachments[f]
+                    idx = "%d%s%s" % (commit['time'], page, 'attach')
+                    if self.options.debug: log("reusing commit with id %s: %s" % (idx, repr(commit)))
+                try:
+                    st = os.stat(filename)
+                    if not 'time' in commit:
+                        # this means the attachment wasn't found in that page's edit-log
+                        # this can happen with old attachments, which were recorded only in the global log
+                        # XXX: fix this, we could get the commit info from the global log now
+                        commit['time'] = st.st_mtime
+                        log("\ncould not find commit for attachment %s, using timestamp %d" % (repr(f), commit['time']))
+                    data = file(filename).read()
+                    blob = "blob\n"
+                    blob += "data %d\n" % len(data)
+                    blob += data
+                    blob += "\n"
+                    if not 'blob' in commit: commit['blob'] = dict()
+                    sha1 = hashlib.sha1("blob %d\0%s" % (len(data), data)).hexdigest()
+                    commit['blob'][sha1] = os.path.join(page.encode('utf-8'), os.path.basename(filename))
+                    if self.options.debug: log("blob (attachment on %s) %s -> %s id: %s" % (
+                    page, sha1, commit['blob'][sha1].decode('utf-8'), idx))
+                    self.output.write(blob)
+                    self.commits[idx] = commit
+                except OSError as (errno, strerror):
+                    # no such file or directory means the attachment was deleted
+                    # everything else should be raised as an exception
+                    if errno != 2:
+                        raise
 
-        def translate(self, s):
-                """This function translates MoinMoin page escapes into a unicode string"""
-                def translate_one(match):
-                        result = ""
-                        num = match.group(1)
-                        while len(num) >= 2:
-                                result.append(chr(num[:2]))
-                                num = num[2:]
-                        return result
-                return self.hex_escape_re.sub(translate_one, s)
+    def translate(self, s):
+        """This function translates MoinMoin page escapes into a unicode string"""
+
+        def translate_one(match):
+            result = ""
+            num = match.group(1)
+            while len(num) >= 2:
+                result.append(chr(num[:2]))
+                num = num[2:]
+            return result
+
+        return self.hex_escape_re.sub(translate_one, s)
+
 
 def resourceusage():
-        u = resource.getrusage(resource.RUSAGE_SELF)
-        log("memory usage: %dKB" % (u.ru_maxrss))
+    u = resource.getrusage(resource.RUSAGE_SELF)
+    log("memory usage: %dKB" % (u.ru_maxrss))
 
-if __name__ == '__main__': 
+
+if __name__ == '__main__':
+    resourceusage()
+    try:
+        i = IkiwikiMigScript().run()
+    finally:
         resourceusage()
-        try:
-                i = IkiwikiMigScript().run()
-        finally:
-                resourceusage()
