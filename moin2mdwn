@@ -457,7 +457,7 @@ class MarkdownFormatter(text_html.Formatter):
                 if parser_name == 'wiki':
                         return text_html.Formatter.parser(self, 'wiki', lines)
                 if parser_name == 'sagecell':
-                        return '\n'.join(['<div class="sagecellraw">'] + lines[1:] + ['</div>'])
+                        return '\n'.join(['```sagecell'] + lines[1:] + ['```'])
 
                 raise NotImplementedError("parser not fully implemented " + parser_name)
                 #raise NotImplementedError("maybe just use parent implementation?")
