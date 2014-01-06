@@ -25,6 +25,8 @@ from MoinMoin.script import MoinScript
 from MoinMoin.script import log
 
 
+keep_attachments = True
+
 filename_re = """\([0-9a-fA-F]+\)"""
 
 
@@ -316,7 +318,7 @@ delete: a file name to delete (optional)
                     continue
                 blob += "\n"
                 self.output.write(blob)
-            elif line.action in ['ATTNEW']:
+            elif line.action in ['ATTNEW'] and keep_attachments:
                 # keep the last commit for the attachment as the right one
                 # we are forced to do this because attachments are not versionned in MoinMoin
                 if self.options.debug: log(
@@ -324,7 +326,7 @@ delete: a file name to delete (optional)
                 # store related commit in attachment table for when we process that page's attachment blobs
                 # convert attachment filename from latin-1 to utf-8
                 attachments[urllib.unquote(oldextra).encode('latin1').decode('utf-8')] = commit
-            elif not line.action in ['ATTDRW', 'ATTDEL']: # ignored actions
+            elif not line.action in ['ATTDRW', 'ATTDEL', 'ATTNEW']: # ignored actions
                 log("Unknown action: " + line.action)
             previouspath = basename # keep track of the previous page name for old-style renames
 

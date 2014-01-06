@@ -187,9 +187,8 @@ class MarkdownFormatter(text_html.Formatter):
                 title = kw[titleattr]
                 break
         if title:
-            return '[[!img %s]' % title
+            return '![%s](%s)' % (title, src or title)
         raise NotImplementedError("image: not sure what to do without a title??")
-        #return '[[!img]]'
 
     # generic transclude/include:
     def transclusion(self, on, **kw):
@@ -234,16 +233,16 @@ class MarkdownFormatter(text_html.Formatter):
         return ['<sub>', '</sub>'][not on]
 
     def strike(self, on, **kw):
-        return ['<del>', '</del>'][not on]
+        return ['~~', '~~'][not on]
 
     def code(self, on, **kw):
         return '`'
 
     def preformatted(self, on, **kw):
         if on:
-            return '[[!format txt """' + "\n"
+            return '<pre>' + "\n"
         else:
-            return "\n" + '"""]]'
+            return "\n" + '</pre>'
 
     # apparently, this is valid again in HTML5 and only deprecated (so okay) in HTML4
     def small(self, on, **kw):
@@ -409,7 +408,7 @@ class MarkdownFormatter(text_html.Formatter):
                 if len(args_list) > 1:
                     return '[%s](%s)' % args_list.reverse()
                 else:
-                    return '[[%s]]' % args
+                    return '[%s](%s)' % (args, args)
         if name.lower() == 'date' or name.lower() == 'datetime':
             if name.lower() == 'date':
                 fmt = self.request.user.date_fmt or self.request.user._cfg.date_fmt
