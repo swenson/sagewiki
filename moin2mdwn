@@ -155,15 +155,16 @@ class MarkdownFormatter(text_html.Formatter):
     #                 self._url_cache = None
     #                 return ']' + ('(' + url + ')' if url else "")
 
-    # Attachments ######################################################
+    #
+    ######################################################
     def attachment_link(self, on, url=None, **kw):
         if on:
-            return self.url(on, url)
+            return self.url(on, '%s/%s' % (self.current_page, url))
         else:
             return self.url(on)
 
     def attachment_image(self, url, **kw):
-        return self.image(url)
+        return self.image('%s/%s' % (self.current_page, url))
 
     def attachment_drawing(self, url, text, **kw):
         raise NotImplementedError("attachment_drawing not implemented")
@@ -474,7 +475,8 @@ class MarkdownFormatter(text_html.Formatter):
                 return '[[!inline pages="%s" quick feeds="no" archive="yes"]]' % " and ".join(params)
         if name.lower() == 'include':
             if len(args_list) > 1:
-                log("\nwarning: discarding arguments after the pagespec in inline: " + " ".join(args_list[1:]))
+                log("\nwarning: assuming from-to include and discarding arguments after the pagespec in inline: " + " ".join(args_list[1:]))
+                return '[[includesnippet:%s]]' % args_list[0]
             return '[[include:%s]]' % args_list[0]
         if name.lower() == 'recentchanges':
             return '[[!inline pages="internal(recentchanges/change_*) and !*/Discussion" template=recentchanges show=0]]'
@@ -575,7 +577,9 @@ class MoinHtmlScript(MoinScript):
         self.totalpagecount = len(self.options.page)
 
         def hack(s):
-            return s.replace("<<Navigation(slides)>>", "").replace("<<Navigation(slideshow)>>", "")
+            return s.replace("<<Navigation(slides)>>", "") \
+                    .replace("<<Navigation(slideshow)>>", "") \
+                    .replace("##start-include\n", "<!--start-include-->")
 
         for page in self.options.page:
             self.pagecount += 1
@@ -591,6 +595,7 @@ class MoinHtmlScript(MoinScript):
 
             try:
                 sys.stdout = open(mdwnpage, 'w')
+                f.current_page = page
                 f.setPage(Page.Page(r, page))
                 parser = text_moin_wiki.Parser(hack(current).decode('utf-8'), r, line_anchors=False)
                 f._tmp_parser = parser
